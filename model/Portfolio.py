@@ -24,6 +24,7 @@ def testRemoveNonTradingDays():
     assert data.index.contains("2009-11-15")
     assert not removeNonTradingDays(data).index.contains("2009-11-15")
 
+
 def testForwardFillPrices():
     data = pd.read_csv("./test/USDSGD.csv", index_col="Date", parse_dates=True)
     assert math.isnan(data.loc["2009-11-12"]["Open"])
@@ -34,25 +35,59 @@ class Portfolio:
         self.assetNames = []
         self.assetDatas = []
         self.assetReturns = []
+        self.assetReturnsDf = None
 
         self.exchange = {}
+
+    def portfolioReturns(self, weights, interval=None):
+        self.returnsDataframeExist()
+        if interval == None:
+            interval = self.commonInterval()
+        fromDate, toDate = interval
+        return np.sum(self.assetReturnsDf[fromDate:toDate].mean() * weights) * 252
+
+    def portfolioVariance(self, weights, interval=None):
+        self.returnsDataframeExist()
+        if interval == None:
+            interval = self.commonInterval()
+        fromDate, toDate = interval
+        return np.dot(
+            weights, np.dot(self.assetReturnsDf[fromDate:toDate].cov() * 252, weights)
+        )
+
+    def portfolioPerformance(self, weights, rf=0, interval=None):
+        rets = self.portfolioReturns(weights, interval)
+        var = self.portfolioVariance(weights, interval)
+        return {"returns": rets, "variance": var, "sharpe": (rets - rf) / var}
+
+    def returnsDataframeExist(self):
+        if not isinstance(self.assetReturnsDf, pd.DataFrame):
+            self.generateReturnsDataframe()
+
+    def generateReturnsDataframe(self):
+        merged = reduce(
+            lambda left, right: pd.merge(left, right, on=["Date"], how="outer"),
+            self.assetReturns,
+        )
+        merged.columns = self.assetNames
+        self.assetReturnsDf = merged
 
     def addAsset(self, file, name):
         data = pd.read_csv(
             file, index_col="Date", parse_dates=True, usecols=["Date", "Adj Close"]
         )
-        preprocessedData  = preprocessData(data)
+        preprocessedData = preprocessData(data)
         returns = np.log(preprocessedData / preprocessedData.shift(1))
 
         self.assetNames.append(name)
-        self.assetDatas.append(data)
+        self.assetDatas.append(preprocessedData)
         self.assetReturns.append(returns)
 
     def addExchangeRate(self, file, name, base=False):
         ex = pd.read_csv(
             file, index_col="Date", parse_dates=True, usecols=["Date", "Close"]
         )
-        preprocessedData  = preprocessData(ex)
+        preprocessedData = preprocessData(ex)
         if base:
             preprocessedData["Close"] = 1 / preprocessedData["Close"]
         self.exchange[name] = preprocessedData
@@ -62,7 +97,7 @@ class Portfolio:
         # FIXME Need to account for exchange range being subset of data
         ex = self.exchange[currency].reindex(data.index, method="ffill")
 
-        adjustedData = data.div(ex["Close"], axis=0)
+        adjustedData = data.mul(ex["Close"], axis=0)
         returns = np.log(adjustedData / adjustedData.shift(1))
 
         self.assetDatas[asset] = adjustedData
@@ -79,7 +114,6 @@ class Portfolio:
         return (latestStart, earliestEnd)
 
     # def estimatePerformance(self):
-
 
 
 def testAddAsset():
@@ -121,12 +155,13 @@ def testExchangeAdjustment():
     p.addExchangeRate("./test/USDSGD.csv", "USD")
     p.exchangeAdjustment(0, "USD")
 
-    assert p.assetDatas[0].iloc[0]["Adj Close"] == 12.263598727335456
-    assert p.assetReturns[0].iloc[-1]["Adj Close"] == -0.007293958229384112
+    assert p.assetDatas[0].iloc[0]["Adj Close"] == 20.864415208749996
+    assert p.assetReturns[0].iloc[-1]["Adj Close"] == 2.2565439772970107e-05
     assert not p.assetDatas[0].isnull().values.any(), "NaN is introduced in data"
     assert (
         not p.assetReturns[0].iloc[1:-1].isnull().values.any()
     ), "NaN is introduced in returns"
+
 
 def testCommonInterval():
     p = Portfolio()
@@ -136,3 +171,43 @@ def testCommonInterval():
 
     assert fromDate == datetime.datetime.fromisoformat("2009-11-25")
     assert toDate == datetime.datetime.fromisoformat("2009-12-09")
+
+
+def testGenerateReturnsDataframe():
+    p = Portfolio()
+    p.addAsset("./test/Asset.csv", "Asset1")
+    p.addAsset("./test/Asset2.csv", "Asset2")
+    p.addAsset("./test/Asset2.csv", "Asset3")
+    p.generateReturnsDataframe()
+
+    assert all(
+        [
+            a == b
+            for a, b in zip(p.assetReturnsDf.columns, ["Asset1", "Asset2", "Asset3"])
+        ]
+    )
+
+def testPortfolioReturns():
+    p = Portfolio()
+    p.addAsset("./test/Asset.csv", "Asset1")
+    p.addAsset("./test/Asset2.csv", "Asset2")
+    assert p.portfolioReturns([0.5, 0.5]) == -0.2504711195035464
+
+
+def testPortfolioVariance():
+    p = Portfolio()
+    p.addAsset("./test/Asset.csv", "Asset1")
+    p.addAsset("./test/Asset2.csv", "Asset2")
+    assert p.portfolioVariance([0.5, 0.5]) == 0.0037867597178967947
+
+
+def testPortfolioPerformance():
+    p = Portfolio()
+    p.addAsset("./test/Asset.csv", "Asset1")
+    p.addAsset("./test/Asset2.csv", "Asset2")
+    perf = p.portfolioPerformance([0.5, 0.5])
+    assert perf == {
+        "returns": -0.2504711195035464,
+        "variance": 0.0037867597178967947,
+        "sharpe": -66.14391674226972,
+    }
