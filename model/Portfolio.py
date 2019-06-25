@@ -3,6 +3,8 @@ import pandas as pd
 import math
 import datetime
 from functools import reduce
+import backtrader as bt
+import backtrader.analyzers as btanalyzers
 
 
 def removeNonTradingDays(df):
@@ -29,6 +31,32 @@ def testForwardFillPrices():
     data = pd.read_csv("./test/USDSGD.csv", index_col="Date", parse_dates=True)
     assert math.isnan(data.loc["2009-11-12"]["Open"])
     assert not math.isnan(forwardFillPrices(data).loc["2009-11-12"]["Open"])
+
+
+class TestStrategy(bt.Strategy):
+    lastRebalanced = None
+    params = (
+        ("rebalance", True),
+        ("rebalancePeriod", 30),
+        ("weights", []),
+        ("assetNames", []),
+    )
+
+    def rebalance(self):
+        self.lastRebalanced = self.datetime.date()
+        for i in range(len(self.params.weights)):
+            self.order_target_percent(
+                data=self.params.assetNames[i], target=self.params.weights[i]
+            )
+
+    def next(self):
+        if self.lastRebalanced == None:
+            self.rebalance()
+        elif (
+            self.datetime.date() - self.lastRebalanced
+        ).days > self.params.rebalancePeriod and self.params.rebalance:
+            self.rebalance()
+
 
 class Portfolio:
     def __init__(self):
@@ -113,7 +141,61 @@ class Portfolio:
                 earliestEnd = data.index[-1]
         return (latestStart, earliestEnd)
 
-    # def estimatePerformance(self):
+    def backtest(self, weights=None):
+        print(weights)
+        # Add rf
+        valueStart = 100000.0
+        cerebro = bt.Cerebro()
+        cerebro.broker.setcash(valueStart)
+        cerebro.addstrategy(
+            TestStrategy, rebalance=True, weights=weights, assetNames=self.assetNames
+        )
+        cerebro.addobserver(bt.observers.DrawDown)
+        cerebro.addanalyzer(btanalyzers.SharpeRatio, _name="sharpe")
+        cerebro.addanalyzer(btanalyzers.DrawDown, _name="drawdown")
+        cerebro.addanalyzer(btanalyzers.TimeDrawDown, _name="timedrawdown")
+        cerebro.addanalyzer(btanalyzers.PeriodStats, _name="periodstats")
+        for i in range(len(self.assetNames)):
+            df = self.assetDatas[i].copy()
+            df.columns = ["close"]
+            df["open"] = self.assetDatas[i].shift(-1)
+            data = bt.feeds.PandasData(dataname=df)
+            cerebro.adddata(data, name=self.assetNames[i])
+        results = cerebro.run()
+
+        # print(cerebro.broker.getvalue())
+        # print(results)
+        # print("Sharpe Ratio:", results[0].analyzers.sharpe.get_analysis())
+        # print("Drawdown:", results[0].analyzers.drawdown.get_analysis())
+        # print("Time Drawdown:", results[0].analyzers.timedrawdown.get_analysis())
+        # print("Period Stats:", results[0].analyzers.periodstats.get_analysis())
+
+        valueEnd = cerebro.broker.getvalue()
+        sharpe = results[0].analyzers.sharpe.get_analysis()["sharperatio"]
+        drawdown = results[0].analyzers.drawdown.get_analysis()["drawdown"]
+        moneydown = results[0].analyzers.drawdown.get_analysis()["moneydown"]
+        maxDrawdown = results[0].analyzers.drawdown.get_analysis()["max"]["drawdown"]
+        maxMoneydown = results[0].analyzers.drawdown.get_analysis()["max"]["moneydown"]
+
+        return {
+            "valueStart": valueStart,
+            "valueEnd": valueEnd,
+            "returns": valueEnd / valueStart,
+            "sharpe": sharpe,
+            "drawdown": drawdown,
+            "moneydown": moneydown,
+            "maxDrawdown": maxDrawdown,
+            "maxMoneydown": maxMoneydown,
+        }
+
+
+def testBacktest():
+    p = Portfolio()
+    p.addAsset("./test/Asset.csv", "Asset1")
+    p.addAsset("./test/Asset2.csv", "Asset2")
+
+    results = p.backtest([0.5, 0.5])
+    print(results)
 
 
 def testAddAsset():
@@ -186,6 +268,7 @@ def testGenerateReturnsDataframe():
             for a, b in zip(p.assetReturnsDf.columns, ["Asset1", "Asset2", "Asset3"])
         ]
     )
+
 
 def testPortfolioReturns():
     p = Portfolio()
