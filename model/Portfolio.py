@@ -5,6 +5,7 @@ import datetime
 from functools import reduce
 import backtrader as bt
 import backtrader.analyzers as btanalyzers
+from pprint import pprint
 
 
 def removeNonTradingDays(df):
@@ -33,7 +34,7 @@ def testForwardFillPrices():
     assert not math.isnan(forwardFillPrices(data).loc["2009-11-12"]["Open"])
 
 
-class TestStrategy(bt.Strategy):
+class RebalanceStrategy(bt.Strategy):
     lastRebalanced = None
     params = (
         ("rebalance", True),
@@ -42,12 +43,20 @@ class TestStrategy(bt.Strategy):
         ("assetNames", []),
     )
 
+    # def notify_order(self, order):
+    #     if order.status in [order.Completed]:
+    #         print(order)
+    #         print(order.info)
+    #         print("==========================================")
+
     def rebalance(self):
         self.lastRebalanced = self.datetime.date()
         for i in range(len(self.params.weights)):
-            self.order_target_percent(
+            o = self.order_target_percent(
                 data=self.params.assetNames[i], target=self.params.weights[i]
             )
+            # print(o)
+            # print("==================================")
 
     def next(self):
         if self.lastRebalanced == None:
@@ -56,6 +65,9 @@ class TestStrategy(bt.Strategy):
             self.datetime.date() - self.lastRebalanced
         ).days > self.params.rebalancePeriod and self.params.rebalance:
             self.rebalance()
+        # Access -1, because drawdown[0] will be calculated after "next"
+        # print("DrawDown: %.2f" % self.stats.drawdown.drawdown[-1])
+        # print("MaxDrawDown: %.2f" % self.stats.drawdown.maxdrawdown[-1])
 
 
 class Portfolio:
@@ -64,8 +76,9 @@ class Portfolio:
         self.assetDatas = []
         self.assetReturns = []
         self.assetReturnsDf = None
-
         self.exchange = {}
+
+        self.rf = 0
 
     def portfolioReturns(self, weights, interval=None):
         self.returnsDataframeExist()
@@ -83,10 +96,10 @@ class Portfolio:
             weights, np.dot(self.assetReturnsDf[fromDate:toDate].cov() * 252, weights)
         )
 
-    def portfolioPerformance(self, weights, rf=0, interval=None):
+    def portfolioPerformance(self, weights, interval=None):
         rets = self.portfolioReturns(weights, interval)
         var = self.portfolioVariance(weights, interval)
-        return {"returns": rets, "variance": var, "sharpe": (rets - rf) / var}
+        return {"returns": rets, "variance": var, "sharpe": (rets - self.rf) / var}
 
     def returnsDataframeExist(self):
         if not isinstance(self.assetReturnsDf, pd.DataFrame):
@@ -141,156 +154,84 @@ class Portfolio:
                 earliestEnd = data.index[-1]
         return (latestStart, earliestEnd)
 
-    def backtest(self, weights=None):
-        print(weights)
-        # Add rf
-        valueStart = 100000.0
+    def backtest(
+        self,
+        weights=None,
+        interval=None,
+        rebalance=True,
+        startValue=100000.0,
+        rebalancePeriod=30,
+    ):
+        if interval == None:
+            interval = self.commonInterval()
+
+        fromdate, todate = interval
         cerebro = bt.Cerebro()
-        cerebro.broker.setcash(valueStart)
+        cerebro.broker.setcash(startValue)
         cerebro.addstrategy(
-            TestStrategy, rebalance=True, weights=weights, assetNames=self.assetNames
+            RebalanceStrategy,
+            rebalance=True,
+            weights=weights,
+            assetNames=self.assetNames,
+            rebalancePeriod=rebalancePeriod,
         )
         cerebro.addobserver(bt.observers.DrawDown)
-        cerebro.addanalyzer(btanalyzers.SharpeRatio, _name="sharpe")
+        cerebro.addanalyzer(
+            btanalyzers.SharpeRatio, _name="sharpe", riskfreerate=self.rf
+        )
         cerebro.addanalyzer(btanalyzers.DrawDown, _name="drawdown")
-        cerebro.addanalyzer(btanalyzers.TimeDrawDown, _name="timedrawdown")
         cerebro.addanalyzer(btanalyzers.PeriodStats, _name="periodstats")
         for i in range(len(self.assetNames)):
             df = self.assetDatas[i].copy()
             df.columns = ["close"]
             df["open"] = self.assetDatas[i].shift(-1)
-            data = bt.feeds.PandasData(dataname=df)
+            df["high"] = self.assetDatas[i]
+            df["low"] = self.assetDatas[i]
+            data = bt.feeds.PandasData(dataname=df, fromdate=fromdate, todate=todate)
             cerebro.adddata(data, name=self.assetNames[i])
         results = cerebro.run()
 
-        # print(cerebro.broker.getvalue())
-        # print(results)
-        # print("Sharpe Ratio:", results[0].analyzers.sharpe.get_analysis())
-        # print("Drawdown:", results[0].analyzers.drawdown.get_analysis())
-        # print("Time Drawdown:", results[0].analyzers.timedrawdown.get_analysis())
-        # print("Period Stats:", results[0].analyzers.periodstats.get_analysis())
+        pprint(results[0])
 
         valueEnd = cerebro.broker.getvalue()
+        periodStats = results[0].analyzers.periodstats.get_analysis()
+        drawdownStats = results[0].analyzers.drawdown.get_analysis()
         sharpe = results[0].analyzers.sharpe.get_analysis()["sharperatio"]
-        drawdown = results[0].analyzers.drawdown.get_analysis()["drawdown"]
-        moneydown = results[0].analyzers.drawdown.get_analysis()["moneydown"]
-        maxDrawdown = results[0].analyzers.drawdown.get_analysis()["max"]["drawdown"]
-        maxMoneydown = results[0].analyzers.drawdown.get_analysis()["max"]["moneydown"]
 
-        return {
-            "valueStart": valueStart,
-            "valueEnd": valueEnd,
-            "returns": valueEnd / valueStart,
-            "sharpe": sharpe,
-            "drawdown": drawdown,
-            "moneydown": moneydown,
-            "maxDrawdown": maxDrawdown,
-            "maxMoneydown": maxMoneydown,
-        }
+        drawdown = drawdownStats["drawdown"]
+        drawdownPeriod = drawdownStats["len"]
+        moneydown = drawdownStats["moneydown"]
+        maxDrawdown = drawdownStats["max"]["drawdown"]
+        maxDrawdownPeriod = drawdownStats["max"]["len"]
+        maxMoneydown = drawdownStats["max"]["moneydown"]
 
+        averageReturns = periodStats["average"]
+        standardDeviation = periodStats["stddev"]
+        positiveYears = periodStats["positive"]
+        negativeYears = periodStats["negative"]
+        noChangeYears = periodStats["nochange"]
+        bestYearReturns = periodStats["best"]
+        worstYearReturns = periodStats["worst"]
 
-def testBacktest():
-    p = Portfolio()
-    p.addAsset("./test/Asset.csv", "Asset1")
-    p.addAsset("./test/Asset2.csv", "Asset2")
+        return (
+            {
+                "valueStart": startValue,
+                "valueEnd": valueEnd,
+                "sharpe": sharpe,
+                "drawdown": drawdown,
+                "drawdownPeriod": drawdownPeriod,
+                "moneydown": moneydown,
+                "maxDrawdown": maxDrawdown,
+                "maxDrawdownPeriod": maxDrawdownPeriod,
+                "maxMoneydown": maxMoneydown,
+                "averageReturns": averageReturns,
+                "standardDeviation": standardDeviation,
+                "positiveYears": positiveYears,
+                "negativeYears": negativeYears,
+                "noChangeYears": noChangeYears,
+                "bestYearReturns": bestYearReturns,
+                "worstYearReturns": worstYearReturns,
+            },
+            cerebro,
+        )
 
-    results = p.backtest([0.5, 0.5])
-    print(results)
-
-
-def testAddAsset():
-    p = Portfolio()
-    p.addAsset("./test/Asset.csv", "Asset1")
-
-    assert p.assetNames == ["Asset1"]
-    assert p.assetDatas[0].iloc[0]["Adj Close"] == 15.996025
-    assert p.assetReturns[0].iloc[1]["Adj Close"] == math.log(
-        p.assetDatas[0].iloc[1]["Adj Close"] / p.assetDatas[0].iloc[0]["Adj Close"]
-    )
-
-
-def testAddExchangeQuoted():
-    # base = False if portfolio currency is the quoted pair, ie SGD in USD/SGD
-    p = Portfolio()
-    p.addExchangeRate("./test/USDSGD.csv", "USD")
-
-    assert (
-        p.exchange["USD"].iloc[0]["Close"] == 1.2867
-    ), "Closing price should not be inverse"
-    assert not p.exchange["USD"].iloc[1]["Close"] == None, "NA values should be filled"
-
-
-def testAddExchangeBase():
-    # base = True if portfolio currency is the base pair, ie SGD in SGD/EUR
-    p = Portfolio()
-    p.addExchangeRate("./test/SGDEUR.csv", "EUR", True)
-
-    assert (
-        p.exchange["EUR"].iloc[0]["Close"] == 2.081078831266128
-    ), "Closing price should be inverse"
-    assert not p.exchange["EUR"].iloc[1]["Close"] == None, "NA values should be filled"
-
-
-def testExchangeAdjustment():
-    p = Portfolio()
-    p.addAsset("./test/Asset.csv", "Asset1")
-    p.addExchangeRate("./test/USDSGD.csv", "USD")
-    p.exchangeAdjustment(0, "USD")
-
-    assert p.assetDatas[0].iloc[0]["Adj Close"] == 20.864415208749996
-    assert p.assetReturns[0].iloc[-1]["Adj Close"] == 2.2565439772970107e-05
-    assert not p.assetDatas[0].isnull().values.any(), "NaN is introduced in data"
-    assert (
-        not p.assetReturns[0].iloc[1:-1].isnull().values.any()
-    ), "NaN is introduced in returns"
-
-
-def testCommonInterval():
-    p = Portfolio()
-    p.addAsset("./test/Asset.csv", "Asset1")
-    p.addAsset("./test/Asset2.csv", "Asset2")
-    fromDate, toDate = p.commonInterval()
-
-    assert fromDate == datetime.datetime.fromisoformat("2009-11-25")
-    assert toDate == datetime.datetime.fromisoformat("2009-12-09")
-
-
-def testGenerateReturnsDataframe():
-    p = Portfolio()
-    p.addAsset("./test/Asset.csv", "Asset1")
-    p.addAsset("./test/Asset2.csv", "Asset2")
-    p.addAsset("./test/Asset2.csv", "Asset3")
-    p.generateReturnsDataframe()
-
-    assert all(
-        [
-            a == b
-            for a, b in zip(p.assetReturnsDf.columns, ["Asset1", "Asset2", "Asset3"])
-        ]
-    )
-
-
-def testPortfolioReturns():
-    p = Portfolio()
-    p.addAsset("./test/Asset.csv", "Asset1")
-    p.addAsset("./test/Asset2.csv", "Asset2")
-    assert p.portfolioReturns([0.5, 0.5]) == -0.2504711195035464
-
-
-def testPortfolioVariance():
-    p = Portfolio()
-    p.addAsset("./test/Asset.csv", "Asset1")
-    p.addAsset("./test/Asset2.csv", "Asset2")
-    assert p.portfolioVariance([0.5, 0.5]) == 0.0037867597178967947
-
-
-def testPortfolioPerformance():
-    p = Portfolio()
-    p.addAsset("./test/Asset.csv", "Asset1")
-    p.addAsset("./test/Asset2.csv", "Asset2")
-    perf = p.portfolioPerformance([0.5, 0.5])
-    assert perf == {
-        "returns": -0.2504711195035464,
-        "variance": 0.0037867597178967947,
-        "sharpe": -66.14391674226972,
-    }
