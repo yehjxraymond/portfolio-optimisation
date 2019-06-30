@@ -2,13 +2,14 @@ import math
 import datetime
 from Portfolio import Portfolio
 
+# TODO Test if backtest if creating orders
 def testBacktest():
     p = Portfolio()
     p.addAsset("../data/A35.csv", "Asset1")
     p.addAsset("../data/BAB.csv", "Asset2")
 
     results = p.backtest([0.5, 0.5])
-    print(results)
+    # print(results)
 
 def testAddAsset():
     p = Portfolio()

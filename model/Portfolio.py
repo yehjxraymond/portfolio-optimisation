@@ -5,7 +5,10 @@ import datetime
 from functools import reduce
 import backtrader as bt
 import backtrader.analyzers as btanalyzers
-from pprint import pprint
+
+# TODO Portfolio plotter
+# TODO Move backtester to it's own module
+# TODO Value at risk calculations
 
 
 def removeNonTradingDays(df):
@@ -36,6 +39,7 @@ def testForwardFillPrices():
 
 class RebalanceStrategy(bt.Strategy):
     lastRebalanced = None
+    addedOrders = []
     params = (
         ("rebalance", True),
         ("rebalancePeriod", 30),
@@ -43,20 +47,23 @@ class RebalanceStrategy(bt.Strategy):
         ("assetNames", []),
     )
 
-    # def notify_order(self, order):
-    #     if order.status in [order.Completed]:
-    #         print(order)
-    #         print(order.info)
-    #         print("==========================================")
-
     def rebalance(self):
         self.lastRebalanced = self.datetime.date()
         for i in range(len(self.params.weights)):
-            o = self.order_target_percent(
+            order = self.order_target_percent(
                 data=self.params.assetNames[i], target=self.params.weights[i]
             )
-            # print(o)
-            # print("==================================")
+
+            if order:
+                self.addedOrders.append(
+                    {
+                        "date": self.datetime.date(),
+                        "asset": self.params.assetNames[i],
+                        "size": order.size,
+                        "price": order.price,
+                        "type": order.ordtype,
+                    }
+                )
 
     def next(self):
         if self.lastRebalanced == None:
@@ -191,8 +198,6 @@ class Portfolio:
             cerebro.adddata(data, name=self.assetNames[i])
         results = cerebro.run()
 
-        pprint(results[0])
-
         valueEnd = cerebro.broker.getvalue()
         periodStats = results[0].analyzers.periodstats.get_analysis()
         drawdownStats = results[0].analyzers.drawdown.get_analysis()
@@ -213,8 +218,14 @@ class Portfolio:
         bestYearReturns = periodStats["best"]
         worstYearReturns = periodStats["worst"]
 
+        def plot():
+            return cerebro.plot(volume=False)
+
         return (
             {
+                "dateStart": interval[0],
+                "dateEnd": interval[1],
+                "days": (interval[1] - interval[0]).days,
                 "valueStart": startValue,
                 "valueEnd": valueEnd,
                 "sharpe": sharpe,
@@ -232,6 +243,6 @@ class Portfolio:
                 "bestYearReturns": bestYearReturns,
                 "worstYearReturns": worstYearReturns,
             },
-            cerebro,
+            plot,
         )
 
