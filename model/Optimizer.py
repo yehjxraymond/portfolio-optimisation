@@ -2,6 +2,7 @@ import scipy.optimize as sco
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit, KFold
+from bayes_opt import BayesianOptimization
 
 
 def returns(data, weights):
@@ -16,9 +17,6 @@ def sharpe(data, weights, rf=0.0):
     rets = returns(data, weights)
     var = variance(data, weights)
     return (rets - rf) / var
-
-def bayesianOptimize(returnsDf, rf=0.0):
-    print(returnsDf)
 
 
 def optimize(returnsDf, rf=0.0):
@@ -40,14 +38,31 @@ class Optimizer:
     def __init__(self, portfolio):
         self.portfolio = portfolio
         self.portfolio.returnsDataframeExist()
-    
+
+    def black_box_function(self, x, y, z):
+        if x == 0 and y == 0 and z == 0:
+            x = 1
+            y = 1
+            z = 1
+        normalisedWeights = np.array([x, y, z]) / np.sum([x, y, z])
+        results, _ = self.portfolio.backtest(normalisedWeights)
+        return results["sharpe"]
+
+    def bayesianOptimize(self, returnsDf, rf=0.0):
+        pbounds = {"x": (0, 1), "y": (0, 1), "z": (0, 1)}
+        optimizer = BayesianOptimization(
+            f=self.black_box_function, pbounds=pbounds, random_state=1
+        )
+        optimizer.maximize(init_points=4, n_iter=20)
+        print(optimizer.max)
+
     def simple(self, interval=None):
         if interval == None:
             interval = self.portfolio.commonInterval()
         startDate, endDate = interval
         rf = self.portfolio.rf
         data = self.portfolio.assetReturnsDf.loc[startDate:endDate]
-        return bayesianOptimize(data, rf)
+        return self.bayesianOptimize(data, rf)
 
     def optimizeSharpe(self, interval=None):
         if interval == None:
@@ -60,7 +75,7 @@ class Optimizer:
     def kfoldTs(self, folds=5):
         rf = self.portfolio.rf
         startDate, endDate = self.portfolio.commonInterval()
-        returnsSubsetCommon = self.portfolio.assetReturnsDf.loc[startDate: endDate]
+        returnsSubsetCommon = self.portfolio.assetReturnsDf.loc[startDate:endDate]
         tscv = TimeSeriesSplit(n_splits=folds)
         weightsList = []
         performanceList = []

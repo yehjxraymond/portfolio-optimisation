@@ -45,4 +45,9 @@ def testKfoldTs():
 
 def testBayesianOptimiser():
     optimizer = Optimizer(p)
-    optimizer.simple()
+    res, plot = p.backtest([0.23511262, 0.39283143, 0.37205595])
+    print(res)
+    
+    res, plot = p.backtest([0.08369825368561112, 0.6594406892589346, 0.25686105705545426])
+    print(res)
+    # optimizer.simple()
