@@ -7,6 +7,11 @@ import backtrader as bt
 import backtrader.analyzers as btanalyzers
 
 # TODO Portfolio plotter
+"""
+- covariance/correlation
+sdfs
+sdf
+"""
 # TODO Move backtester to it's own module
 # TODO Value at risk calculations
 

@@ -8,9 +8,8 @@ def testBacktest():
     p.addAsset("../data/A35.csv", "Asset1")
     p.addAsset("../data/BAB.csv", "Asset2")
 
-    results = p.backtest([0.5, 0.5])
-    # print(results)
-
+    results, plot = p.backtest([0.5, 0.5])
+    
 def testAddAsset():
     p = Portfolio()
     p.addAsset("./test/Asset.csv", "Asset1")

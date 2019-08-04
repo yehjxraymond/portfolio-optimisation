@@ -6,12 +6,14 @@ p.addAsset("../data/A35.csv", "Asset1")
 p.addAsset("../data/BAB.csv", "Asset2")
 p.addAsset("../data/IWDA.csv", "Asset3")
 
+
 def testOptimizeSharpe():
     optimizer = Optimizer(p)
     weights = optimizer.optimizeSharpe()
     assert weights[0] == 0.10091446157346126
     assert weights[1] == 0.6462589503813203
     assert weights[2] == 0.2528265880452185
+
 
 def testKfold():
     optimizer = Optimizer(p)
@@ -40,3 +42,7 @@ def testKfoldTs():
     assert len(tests["weightsStd"]) == 3
     assert len(tests["sharpeRaw"]) == 5
     assert len(tests["weightsRaw"]) == 5
+
+def testBayesianOptimiser():
+    optimizer = Optimizer(p)
+    optimizer.simple()

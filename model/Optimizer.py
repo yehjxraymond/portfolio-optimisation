@@ -17,6 +17,9 @@ def sharpe(data, weights, rf=0.0):
     var = variance(data, weights)
     return (rets - rf) / var
 
+def bayesianOptimize(returnsDf, rf=0.0):
+    print(returnsDf)
+
 
 def optimize(returnsDf, rf=0.0):
     numberOfAssets = returnsDf.shape[1]
@@ -37,6 +40,14 @@ class Optimizer:
     def __init__(self, portfolio):
         self.portfolio = portfolio
         self.portfolio.returnsDataframeExist()
+    
+    def simple(self, interval=None):
+        if interval == None:
+            interval = self.portfolio.commonInterval()
+        startDate, endDate = interval
+        rf = self.portfolio.rf
+        data = self.portfolio.assetReturnsDf.loc[startDate:endDate]
+        return bayesianOptimize(data, rf)
 
     def optimizeSharpe(self, interval=None):
         if interval == None:
