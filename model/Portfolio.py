@@ -111,7 +111,7 @@ class Portfolio:
     def portfolioPerformance(self, weights, interval=None):
         rets = self.portfolioReturns(weights, interval)
         var = self.portfolioVariance(weights, interval)
-        return {"returns": rets, "variance": var, "sharpe": (rets - self.rf) / var}
+        return {"returns": rets, "variance": var, "sharpe": (rets - self.rf) / math.sqrt(var)}
 
     def returnsDataframeExist(self):
         if not isinstance(self.assetReturnsDf, pd.DataFrame):

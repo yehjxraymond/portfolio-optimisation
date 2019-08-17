@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from bayes_opt import BayesianOptimization
+import scipy.optimize as sco
 
 # logging.basicConfig(level=logging.INFO)
 
@@ -55,12 +56,34 @@ class OptimisationResults:
 
         plt.legend()
         plt.show()
-    
-    def stuffs(self):
-        # Convergence of sharpe (based on last few index)
-        # Convergence of sharpe (based on ranked sharpe)
-        # Convergence of each asset allocation amongst top few sharpe portfolio
-        print("Hi")
+
+    def plotConvergence(self):
+        # Show maximum sharpe at each iteration
+        plt.subplot(221)
+        plt.plot(self.results.cummax()["Sharpe"])
+        plt.title("Max Sharpe")
+
+        # Show difference between sharpe
+        plt.subplot(222)
+        plt.plot(self.results.diff().abs()["Sharpe"])
+        plt.title("Difference Between Sharpe")
+
+        # Select subset of top 10% of portfolio
+        numOfAssets = self.results.shape[1] - 3
+        numOfTopAllocations = max(10, math.ceil(0.05 * self.results.shape[0]))
+        topAllocations = self.results.sort_values(by=["Sharpe"]).iloc[
+            -numOfTopAllocations:, 3:
+        ]
+
+        # Show distribution of asset allocation for each asset for stability test
+        plt.subplot(212)
+        violinData = list(
+            map(lambda x: topAllocations[x].values, topAllocations.columns)
+        )
+        plt.violinplot(violinData, showmeans=True)
+        plt.xticks(range(1, 1 + numOfAssets), labels=topAllocations.columns)
+        plt.title("Allocation for each asset for top portfolios")
+        plt.show()
 
     def optimisedWeights(self):
         return self.results.iloc[self.results["Sharpe"].idxmax()]
@@ -78,6 +101,7 @@ def expectedSharpeRatio(returns, weight, rf=0):
     return (expectedPortfolioRet(returns, weight) - rf) / expectedPortfolioVar(
         returns, weight
     )
+
 
 # Bayesian Optimizer for slow backtests
 def bayesianOptimizer(portfolio, interval=None, **kwargs):
@@ -109,6 +133,7 @@ def bayesianOptimizer(portfolio, interval=None, **kwargs):
     )
     optimizer.maximize(init_points=1, n_iter=noSimulations)
     return optResults
+
 
 # Monte Carlo Optimizer using statistical model of the returns distribution
 def monteCarloProxyOptimizer(portfolio, interval=None, **kwargs):
@@ -157,13 +182,41 @@ def monteCarloOptimizer(portfolio, interval=None, **kwargs):
     return optResults
 
 
+# Sequential Least Squares Programming optimizer using the statistical model for the assets
+def slsqpOptimizer(portfolio, interval=None, **kwargs):
+    optResults = OptimisationResults(portfolio.assetNames, rf=portfolio.rf)
+
+    def black_box_function(weights):
+        results = dict(zip(portfolio.assetNames, weights))
+        performance = portfolio.portfolioPerformance(weights)
+
+        results["Sharpe"] = performance["sharpe"]
+        results["Std"] = math.sqrt(performance["variance"])
+        results["Returns"] = performance["returns"]
+        optResults.addData(results)
+        return -performance["sharpe"]
+
+    numberOfAssets = len(portfolio.assetNames)
+    constraints = {"type": "eq", "fun": lambda x: np.sum(x) - 1}
+    bounds = tuple((0, 1) for x in range(numberOfAssets))
+    initial = np.array(numberOfAssets * [1.0 / numberOfAssets])
+    sco.minimize(
+        black_box_function,
+        initial,
+        method="SLSQP",
+        bounds=bounds,
+        constraints=constraints,
+    )
+    return optResults
+
+
 def testFn():
     p = Portfolio()
-    p.addAsset("../data/A35.csv", "Asset1")
-    p.addAsset("../data/BAB.csv", "Asset2")
-    p.addAsset("../data/IWDA.csv", "Asset3")
+    p.addAsset("../data/A35.csv", "A35")
+    p.addAsset("../data/BAB.csv", "BAB")
+    p.addAsset("../data/IWDA.csv", "IWDA")
     p.generateReturnsDataframe()
     p.rf = 0.02
-    results = monteCarloProxyOptimizer(p, sims=500)
-    print(results.results)
-    results.plotEfficientFrontier()
+    results = monteCarloProxyOptimizer(p, sims=1000)
+    # results.plotEfficientFrontier()
+    results.plotConvergence()
